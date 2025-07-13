@@ -371,6 +371,7 @@ StartupNotify=true
 
 tasks.build {
     dependsOn(makeExecutables)
+    // AppImage task can be run separately: ./gradlew makeAppImage
 }
 
 fun parseToolOptions(options: String?): MutableList<String> {
