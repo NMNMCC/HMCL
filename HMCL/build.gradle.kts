@@ -209,6 +209,161 @@ val makeExecutables by tasks.registering {
     }
 }
 
+val downloadJRE by tasks.registering {
+    description = "Download JRE for AppImage packaging"
+    group = "distribution"
+    
+    val jreDir = File(project.buildDir, "jre")
+    val jreArchive = File(project.buildDir, "jre.tar.gz")
+    
+    outputs.dir(jreDir)
+    
+    doLast {
+        // Check if JRE directory already exists
+        if (jreDir.exists()) {
+            logger.lifecycle("JRE already exists at: ${jreDir.absolutePath}")
+            return@doLast
+        }
+        
+        // Determine platform and architecture
+        val osName = System.getProperty("os.name").toLowerCase()
+        val osArch = System.getProperty("os.arch").toLowerCase()
+        
+        val platform = when {
+            osName.contains("linux") -> "linux"
+            osName.contains("mac") -> "mac"
+            osName.contains("win") -> "windows"
+            else -> "linux" // default to linux
+        }
+        
+        val arch = when {
+            osArch.contains("amd64") || osArch.contains("x86_64") -> "x64"
+            osArch.contains("aarch64") || osArch.contains("arm64") -> "aarch64"
+            else -> "x64" // default to x64
+        }
+        
+        // For AppImage, we focus on Linux platform
+        if (platform == "linux") {
+            // Try to use system JRE first
+            val javaHome = System.getProperty("java.home")
+            val systemJreDir = File(javaHome)
+            
+            if (systemJreDir.exists()) {
+                logger.lifecycle("Using system JRE from: ${systemJreDir.absolutePath}")
+                systemJreDir.copyRecursively(jreDir)
+            } else {
+                logger.warn("System JRE not found. AppImage will use system Java at runtime.")
+                // Create empty directory to satisfy task outputs
+                jreDir.mkdirs()
+            }
+        } else {
+            logger.warn("JRE download not supported for platform: $platform")
+            jreDir.mkdirs()
+        }
+    }
+}
+
+val makeAppImage by tasks.registering {
+    description = "Create AppImage package with jar and jre"
+    group = "distribution"
+    
+    dependsOn(tasks.jar, downloadJRE)
+    
+    inputs.file(jarPath)
+    outputs.file(File(jarPath.parentFile, jarPath.nameWithoutExtension + ".AppImage"))
+    
+    doLast {
+        val appImageDir = File(jarPath.parentFile, "AppImage")
+        val appDir = File(appImageDir, "HMCL.AppDir")
+        
+        // Clean up any existing AppImage directory
+        if (appImageDir.exists()) {
+            appImageDir.deleteRecursively()
+        }
+        
+        // Create AppImage directory structure
+        appDir.mkdirs()
+        File(appDir, "usr/bin").mkdirs()
+        File(appDir, "usr/share/applications").mkdirs()
+        File(appDir, "usr/share/pixmaps").mkdirs()
+        File(appDir, "usr/share/java").mkdirs()
+        
+        // Copy JAR file
+        jarPath.copyTo(File(appDir, "usr/share/java/HMCL.jar"))
+        
+        // Copy JRE if available
+        val jreDir = File(project.buildDir, "jre")
+        if (jreDir.exists() && jreDir.listFiles()?.isNotEmpty() == true) {
+            val jvmDir = File(appDir, "usr/lib/jvm")
+            jvmDir.mkdirs()
+            jreDir.copyRecursively(jvmDir)
+            logger.lifecycle("JRE included in AppImage")
+        } else {
+            logger.warn("JRE not found, AppImage will use system Java")
+        }
+        
+        // Create AppRun script
+        val appRunScript = File(appDir, "AppRun")
+        appRunScript.writeText("""#!/bin/bash
+HERE="${'$'}(dirname "${'$'}(readlink -f "${'$'}{0}")")"
+export PATH="${'$'}HERE/usr/bin:${'$'}PATH"
+export LD_LIBRARY_PATH="${'$'}HERE/usr/lib:${'$'}LD_LIBRARY_PATH"
+export XDG_DATA_DIRS="${'$'}HERE/usr/share:${'$'}XDG_DATA_DIRS"
+
+# Try to use bundled JRE first, then fall back to system Java
+if [ -d "${'$'}HERE/usr/lib/jvm" ]; then
+    export JAVA_HOME="${'$'}HERE/usr/lib/jvm"
+    export PATH="${'$'}JAVA_HOME/bin:${'$'}PATH"
+    JAVA_CMD="${'$'}JAVA_HOME/bin/java"
+else
+    JAVA_CMD="java"
+fi
+
+exec "${'$'}JAVA_CMD" -jar "${'$'}HERE/usr/share/java/HMCL.jar" "${'$'}@"
+""")
+        appRunScript.setExecutable(true)
+        
+        // Create .desktop file
+        val desktopFile = File(appDir, "HMCL.desktop")
+        desktopFile.writeText("""[Desktop Entry]
+Type=Application
+Name=HMCL
+Comment=Hello Minecraft! Launcher
+Exec=HMCL
+Icon=HMCL
+Categories=Game;
+StartupNotify=true
+""")
+        
+        // Copy icon from resources
+        val resourcesDir = File(project.projectDir, "src/main/resources/assets/img")
+        val iconFile = File(resourcesDir, "icon.png")
+        if (iconFile.exists()) {
+            iconFile.copyTo(File(appDir, "HMCL.png"))
+            iconFile.copyTo(File(appDir, "usr/share/pixmaps/HMCL.png"))
+        }
+        
+        // Check if appimagetool is available
+        val appimagetoolResult = project.exec {
+            commandLine = listOf("which", "appimagetool")
+            isIgnoreExitValue = true
+        }
+        
+        if (appimagetoolResult.exitValue == 0) {
+            // Use appimagetool to create AppImage
+            val appImageFile = File(jarPath.parentFile, jarPath.nameWithoutExtension + ".AppImage")
+            project.exec {
+                commandLine = listOf("appimagetool", appDir.absolutePath, appImageFile.absolutePath)
+            }
+            createChecksum(appImageFile)
+            logger.lifecycle("AppImage created: ${'$'}{appImageFile.absolutePath}")
+        } else {
+            logger.warn("appimagetool not found. AppImage directory created at: ${'$'}{appDir.absolutePath}")
+            logger.warn("To create AppImage, install appimagetool and run: appimagetool ${'$'}{appDir.absolutePath}")
+        }
+    }
+}
+
 tasks.build {
     dependsOn(makeExecutables)
 }
