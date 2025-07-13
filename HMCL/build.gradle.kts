@@ -213,8 +213,7 @@ val downloadJRE by tasks.registering {
     description = "Download JRE for AppImage packaging"
     group = "distribution"
     
-    val jreDir = File(project.buildDir, "jre")
-    val jreArchive = File(project.buildDir, "jre.tar.gz")
+    val jreDir = File(layout.buildDirectory.get().asFile, "jre")
     
     outputs.dir(jreDir)
     
@@ -226,20 +225,13 @@ val downloadJRE by tasks.registering {
         }
         
         // Determine platform and architecture
-        val osName = System.getProperty("os.name").toLowerCase()
-        val osArch = System.getProperty("os.arch").toLowerCase()
+        val osName = System.getProperty("os.name").lowercase()
         
         val platform = when {
             osName.contains("linux") -> "linux"
             osName.contains("mac") -> "mac"
             osName.contains("win") -> "windows"
             else -> "linux" // default to linux
-        }
-        
-        val arch = when {
-            osArch.contains("amd64") || osArch.contains("x86_64") -> "x64"
-            osArch.contains("aarch64") || osArch.contains("arm64") -> "aarch64"
-            else -> "x64" // default to x64
         }
         
         // For AppImage, we focus on Linux platform
@@ -292,7 +284,7 @@ val makeAppImage by tasks.registering {
         jarPath.copyTo(File(appDir, "usr/share/java/HMCL.jar"))
         
         // Copy JRE if available
-        val jreDir = File(project.buildDir, "jre")
+        val jreDir = File(layout.buildDirectory.get().asFile, "jre")
         if (jreDir.exists() && jreDir.listFiles()?.isNotEmpty() == true) {
             val jvmDir = File(appDir, "usr/lib/jvm")
             jvmDir.mkdirs()
@@ -344,22 +336,35 @@ StartupNotify=true
         }
         
         // Check if appimagetool is available
-        val appimagetoolResult = project.exec {
-            commandLine = listOf("which", "appimagetool")
-            isIgnoreExitValue = true
+        val appimagetoolResult = try {
+            val result = ProcessBuilder("which", "appimagetool")
+                .redirectOutput(ProcessBuilder.Redirect.PIPE)
+                .redirectError(ProcessBuilder.Redirect.PIPE)
+                .start()
+            result.waitFor()
+            result.exitValue()
+        } catch (e: Exception) {
+            1 // not found
         }
         
-        if (appimagetoolResult.exitValue == 0) {
+        if (appimagetoolResult == 0) {
             // Use appimagetool to create AppImage
             val appImageFile = File(jarPath.parentFile, jarPath.nameWithoutExtension + ".AppImage")
-            project.exec {
-                commandLine = listOf("appimagetool", appDir.absolutePath, appImageFile.absolutePath)
+            val appimagetoolProcess = ProcessBuilder("appimagetool", appDir.absolutePath, appImageFile.absolutePath)
+                .redirectOutput(ProcessBuilder.Redirect.INHERIT)
+                .redirectError(ProcessBuilder.Redirect.INHERIT)
+                .start()
+            val exitCode = appimagetoolProcess.waitFor()
+            
+            if (exitCode == 0) {
+                createChecksum(appImageFile)
+                logger.lifecycle("AppImage created: ${appImageFile.absolutePath}")
+            } else {
+                logger.error("appimagetool failed with exit code: $exitCode")
             }
-            createChecksum(appImageFile)
-            logger.lifecycle("AppImage created: ${'$'}{appImageFile.absolutePath}")
         } else {
-            logger.warn("appimagetool not found. AppImage directory created at: ${'$'}{appDir.absolutePath}")
-            logger.warn("To create AppImage, install appimagetool and run: appimagetool ${'$'}{appDir.absolutePath}")
+            logger.warn("appimagetool not found. AppImage directory created at: ${appDir.absolutePath}")
+            logger.warn("To create AppImage, install appimagetool and run: appimagetool ${appDir.absolutePath}")
         }
     }
 }

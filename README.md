@@ -54,6 +54,22 @@ Simply execute the following command in the project root directory:
 
 Make sure you have Java 11 or later installed.
 
+### AppImage Packaging
+
+HMCL supports packaging into AppImage format for Linux systems:
+
+```bash
+./gradlew makeAppImage
+```
+
+This creates a portable AppImage that bundles the JAR file and JRE. The AppImage can be run on any Linux system without requiring Java installation.
+
+Prerequisites:
+- Install `appimagetool` for creating the final AppImage file
+- Linux system (AppImage is Linux-specific)
+
+For more details, see the AppImage documentation in the project.
+
 ## JVM Options (for debugging)
 
 | Parameter                                    | Description                                                                                   |
